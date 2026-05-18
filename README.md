@@ -96,6 +96,47 @@ This does not replace manual analysis. It reduces the time spent on initial tria
 
 ---
 
+## Autonomous Reconnaissance Workflow
+
+Reconnaissance automation is not about running more tools faster. It is about structuring the workflow so each stage informs the next, reducing the time between initial scope discovery and actionable findings.
+
+A well-structured autonomous reconnaissance workflow covers four distinct phases:
+
+**1. Attack surface discovery**
+The first phase maps what actually exists before any vulnerability testing begins. Subdomain enumeration, port scanning, and service fingerprinting define the scope boundary. Many engagements reveal that the real attack surface — staging environments, forgotten API subdomains, legacy admin panels — is significantly larger than the documented asset inventory.
+
+**2. Vulnerability prioritisation**
+Not every finding carries equal weight. A Nuclei CVE match on an outdated library version carries different risk than an exposed `.env` file containing live credentials. Effective offensive security workflows rank findings by exploitability and blast radius, not just CVSS score. Combining Nmap service data with Nuclei template matches and FFUF-discovered paths gives a more accurate exploitability picture than any single tool alone.
+
+**3. Offensive security workflows**
+The chain — reconnaissance → service detection → template scanning → fuzzing → injection testing — mirrors how a skilled attacker enumerates a target. The difference between manual and automated execution is not the methodology; it is the time taken to complete each stage and the consistency of coverage across large scopes.
+
+**4. AI-assisted analysis**
+After the pipeline completes, an AI analysis layer contextualises findings: clustering related issues, generating remediation summaries, and producing an executive overview from raw tool output. This accelerates the triage phase without replacing manual validation of exploitability.
+
+A deeper comparison between manual testing workflows and autonomous pentesting approaches can be found here:
+https://www.phantomred.com/phantomred-vs-burp-suite.html
+
+---
+
+## Tools Commonly Used in Pentesting Pipelines
+
+Security professionals draw from a consistent set of tools across reconnaissance, vulnerability scanning, and exploitation phases. Here is where each commonly-used tool fits in an external pentest workflow:
+
+**Nmap** — Port scanning and service version detection. Entry point for any external engagement. Identifies open ports, running services, and software versions that inform all subsequent scanning decisions. Essential for both network-layer recon and feeding service context into Nuclei.
+
+**Nuclei** — Template-based vulnerability scanner maintained by ProjectDiscovery. 9000+ community templates covering CVEs, exposed admin panels, misconfigured services, and web application vulnerability patterns. Runs after Nmap service detection to apply targeted templates against confirmed technologies rather than scanning everything blindly.
+
+**FFUF** — Fast web fuzzer for directory enumeration, parameter discovery, and virtual host identification. Surfaces endpoints and paths that are not linked from the application surface — backup files, development endpoints, exposed configuration files, and unprotected admin interfaces. FFUF output feeds directly into manual testing and SQLMap.
+
+**SQLMap** — Automated SQL injection detection and database extraction. Runs against specific parameters discovered during fuzzing or application crawling. Should always be used with explicit authorisation — `--level` and `--risk` settings should be conservative on production targets.
+
+**Burp Suite** — Industry-standard proxy for manual web application testing. Not an automation tool, but the primary instrument for request interception, manual exploitation, and deep application logic testing. Sits alongside automated tools rather than replacing them — automated recon and manual Burp-based exploitation are complementary workflows, not competing ones.
+
+Each tool addresses a different phase of the engagement. Effective pentest pipelines chain them deliberately rather than running each in isolation.
+
+---
+
 ## Further reading
 
 For a detailed comparison of [manual vs autonomous penetration testing](https://www.phantomred.com/phantomred-vs-burp-suite.html) approaches and where each fits in a professional workflow, see the PhantomRed documentation.
