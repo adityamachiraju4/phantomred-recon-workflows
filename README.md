@@ -40,6 +40,9 @@ go install github.com/ffuf/ffuf/v2@latest
 
 ## Pipeline Architecture
 
+![PhantomRed Autonomous Recon Pipeline](screenshots/recon-pipeline.png)
+
+
 ```
 Target domain
      │
