@@ -1,158 +1,200 @@
 # phantomred-recon-workflows
 
-Documented recon workflows, tool chaining patterns, and attack surface enumeration methodology for bug bounty hunters and freelance pentesters.
+![Last Commit](https://img.shields.io/github/last-commit/adityamachiraju4/phantomred-recon-workflows)
+![Stars](https://img.shields.io/github/stars/adityamachiraju4/phantomred-recon-workflows?style=flat)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Topics](https://img.shields.io/badge/topics-recon%20%7C%20nuclei%20%7C%20ffuf%20%7C%20bug%20bounty-red)
 
-These workflows reflect how modern offensive security automation is structured — from initial domain recon through vulnerability validation. They are tool-agnostic where possible and reference open-source tools throughout.
+Documented recon workflows, tool chaining patterns, and attack surface enumeration methodology for bug bounty hunters and pentesters. Maintained by [PhantomRed](https://www.phantomred.com) — autonomous AI penetration testing.
 
 ---
 
-## What autonomous recon automation looks like
+## Quick Start
 
-Manual recon involves running individual tools, collecting outputs, cross-referencing results, and feeding findings into the next stage by hand. That process works, but it does not scale across large scopes or repeated engagements.
+```bash
+# Clone
+git clone https://github.com/adityamachiraju4/phantomred-recon-workflows.git
+cd phantomred-recon-workflows
 
-Autonomous recon automation chains these tools in sequence, passes outputs between stages programmatically, and applies analysis at the end. The goal is not to replace the pentester — it is to eliminate the repetitive orchestration work so the pentester can focus on exploitation and reporting.
+# Make scripts executable
+chmod +x scripts/*.sh
 
-The full chain looks like this:
+# Run full recon pipeline against a target
+./scripts/full-recon-pipeline.sh target.com
+```
+
+**Requirements:** `subfinder`, `assetfinder`, `amass`, `dnsx`, `httpx`, `nuclei`, `ffuf`, `jq`
+
+```bash
+# Install all tools via Go
+go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install github.com/tomnomnom/assetfinder@latest
+go install github.com/owasp-amass/amass/v4/...@master
+go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install github.com/ffuf/ffuf/v2@latest
+```
+
+---
+
+## Pipeline Architecture
 
 ```
 Target domain
-  └─ Subdomain enumeration        (subfinder, amass)
-  └─ Port & service discovery     (nmap -sV -sC)
-  └─ Web surface scanning         (nuclei -t /templates)
-  └─ Directory & path fuzzing     (ffuf -w wordlist.txt)
-  └─ Injection testing            (sqlmap --batch)
-  └─ AI-assisted analysis         (LLM → risk scoring + report)
+     │
+     ▼
+┌─────────────────────────────────────────────┐
+│  PHASE 1 — Passive Subdomain Enumeration    │
+│  subfinder + assetfinder + amass (passive)  │
+│  → subs-all.txt  (merged, deduplicated)     │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  PHASE 2 — DNS Validation                   │
+│  dnsx (A, CNAME, MX resolution)             │
+│  → dns-valid.txt + potential-takeovers.txt  │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  PHASE 3 — Live Host Probing                │
+│  httpx (HTTP/HTTPS + tech detection)        │
+│  → live-hosts.txt                           │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  PHASE 4 — Vulnerability Scanning           │
+│  nuclei (exposures, CVEs, misconfigs)       │
+│  → nuclei-triage.txt (severity-sorted)      │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  PHASE 5 — Content Discovery                │
+│  ffuf (directory + backup + param fuzzing)  │
+│  → ffuf/*.json                              │
+└─────────────────────────────────────────────┘
 ```
-
-Each stage feeds the next. Nmap output informs which services Nuclei targets. FFUF output surfaces endpoints that SQLMap tests. The AI layer receives all findings and produces a risk-prioritized summary.
 
 ---
 
-## Tools used in this workflow
+## Scripts
 
-### Nmap
-Port scanning and service version detection. The entry point for any external recon workflow. Key flags:
+| Script | Description | Usage |
+|--------|-------------|-------|
+| `scripts/full-recon-pipeline.sh` | End-to-end pipeline: enum → DNS → httpx → nuclei → ffuf | `./scripts/full-recon-pipeline.sh target.com` |
+| `scripts/subdomain-recon.sh` | Subdomain enumeration + DNS validation + CNAME takeover detection | `./scripts/subdomain-recon.sh target.com` |
+| `scripts/nuclei-pipeline.sh` | Severity-gated Nuclei scan + triage + delta detection | `./scripts/nuclei-pipeline.sh live-hosts.txt` |
+| `scripts/ffuf-content-discovery.sh` | Directory, backup file, and parameter fuzzing | `./scripts/ffuf-content-discovery.sh live-hosts.txt` |
+
+---
+
+## One-liners
 
 ```bash
-nmap -sV -sC -T4 -p- target.com
+# Fastest live subdomain sweep
+subfinder -d target.com -silent | httpx -silent | tee live-hosts.txt
+
+# Nuclei scan on live hosts (high/critical only)
+cat live-hosts.txt | nuclei -severity high,critical -rl 50 -silent
+
+# Full passive enum → merge → DNS validate
+subfinder -d target.com -silent > sf.txt & \
+assetfinder --subs-only target.com > af.txt & \
+amass enum -passive -d target.com > am.txt & \
+wait && cat sf.txt af.txt am.txt | sort -u | dnsx -silent > dns-valid.txt
+
+# CNAME takeover detection
+dnsx -l subs.txt -cname -silent | grep -E 'amazonaws|github\.io|heroku|azurewebsites'
+
+# Nuclei + jq triage (sort findings by severity)
+nuclei -l live.txt -json -o results.json && \
+jq -r '[.info.severity,.host,.info.name] | @tsv' results.json | sort -k1
+
+# Net-new findings across re-scans
+comm -13 <(sort previous-triage.txt) <(sort current-triage.txt)
 ```
 
-`-sV` detects service versions. `-sC` runs default scripts. `-p-` scans all 65535 ports. Output feeds into service-specific scanning in the next stage.
+---
 
-### Nuclei
-Template-based vulnerability scanner with 9000+ community and official templates covering CVEs, misconfigurations, exposed panels, and web application checks.
+## Workflow Docs
 
-```bash
-nuclei -u https://target.com -t /templates -severity medium,high,critical
-```
-
-Templates are organised by technology, CVE, and vulnerability class. Running technology-specific templates against services discovered by Nmap significantly reduces noise.
-
-### FFUF
-Fast web fuzzer for directory enumeration, parameter discovery, and virtual host fuzzing.
-
-```bash
-ffuf -u https://target.com/FUZZ -w /wordlists/common.txt -mc 200,301,302,403
-```
-
-Useful for finding admin panels, backup files, exposed config endpoints, and unlinked paths that do not appear in crawls.
-
-### SQLMap
-Automated SQL injection detection and exploitation tool. Runs against specific parameters identified during fuzzing or crawling.
-
-```bash
-sqlmap -u "https://target.com/page?id=1" --batch --level=3 --risk=2
-```
-
-Should be run only against targets with explicit written authorisation.
+| File | Description |
+|------|-------------|
+| `workflows/subdomain-recon-methodology.md` | Passive vs active recon, tool selection, pipeline sequencing |
+| `workflows/nuclei-template-guide.md` | Template categories, rate limiting, false positive reduction |
+| `workflows/attack-surface-checklist.md` | Pre-engagement checklist for bug bounty and pentest scope |
+| `tools-used.md` | Tool reference with install commands and key flags |
+| `workflow-example.md` | Step-by-step recon walkthrough with sample output |
 
 ---
 
-## Attack surface discovery concepts
+## Tool Reference
 
-Attack surface enumeration starts broader than most teams expect. For a single domain, the real scope includes:
+### Subdomain Enumeration
 
-- **Subdomains** — dev, staging, api, admin, and legacy subdomains often have weaker security posture than the main domain
-- **Open ports** — services running on non-standard ports are frequently missed in web-only assessments
-- **Exposed paths** — admin panels, `.env` files, `.git` directories, backup archives, and config files surfaced by fuzzing
-- **Third-party integrations** — JavaScript files often leak API endpoints, cloud storage buckets, and internal service references
-- **CVE exposure** — services running outdated software versions with public CVEs and available Nuclei templates
+| Tool | Mode | Best For |
+|------|------|----------|
+| `subfinder` | Passive | Fast CT log + passive DNS enumeration |
+| `assetfinder` | Passive | crt.sh, Facebook CT, VirusTotal |
+| `amass` | Passive + Active | ASN-based discovery + DNS brute force |
+| `shuffledns` | Active | Permutation brute force with custom wordlists |
 
-Mapping all of this before starting exploitation gives a significantly clearer picture of where actual risk lives.
+### Validation & Probing
 
----
+| Tool | Purpose |
+|------|---------|
+| `dnsx` | DNS resolution, CNAME detection, takeover identification |
+| `httpx` | Live HTTP/HTTPS probing, tech fingerprinting, status codes |
 
-## AI-assisted analysis in offensive workflows
+### Vulnerability Scanning
 
-After the tool pipeline completes, raw findings need to be contextualised. Not all open ports are equally significant. Not all Nuclei template matches indicate exploitable vulnerabilities in every configuration.
-
-An AI analysis layer can:
-- Cluster related findings (e.g. an exposed `.git` directory + a misconfigured server header + an outdated CMS version are likely related)
-- Assign risk weighting based on finding combinations rather than individual CVSS scores
-- Generate remediation context for findings that would otherwise require manual research
-- Produce an executive summary from technical outputs
-
-This does not replace manual analysis. It reduces the time spent on initial triage and report scaffolding.
-
----
-
-## Autonomous Reconnaissance Workflow
-
-Reconnaissance automation is not about running more tools faster. It is about structuring the workflow so each stage informs the next, reducing the time between initial scope discovery and actionable findings.
-
-A well-structured autonomous reconnaissance workflow covers four distinct phases:
-
-**1. Attack surface discovery**
-The first phase maps what actually exists before any vulnerability testing begins. Subdomain enumeration, port scanning, and service fingerprinting define the scope boundary. Many engagements reveal that the real attack surface — staging environments, forgotten API subdomains, legacy admin panels — is significantly larger than the documented asset inventory.
-
-**2. Vulnerability prioritisation**
-Not every finding carries equal weight. A Nuclei CVE match on an outdated library version carries different risk than an exposed `.env` file containing live credentials. Effective offensive security workflows rank findings by exploitability and blast radius, not just CVSS score. Combining Nmap service data with Nuclei template matches and FFUF-discovered paths gives a more accurate exploitability picture than any single tool alone.
-
-**3. Offensive security workflows**
-The chain — reconnaissance → service detection → template scanning → fuzzing → injection testing — mirrors how a skilled attacker enumerates a target. The difference between manual and automated execution is not the methodology; it is the time taken to complete each stage and the consistency of coverage across large scopes.
-
-**4. AI-assisted analysis**
-After the pipeline completes, an AI analysis layer contextualises findings: clustering related issues, generating remediation summaries, and producing an executive overview from raw tool output. This accelerates the triage phase without replacing manual validation of exploitability.
-
-A deeper comparison between manual testing workflows and autonomous pentesting approaches can be found here:
-https://www.phantomred.com/phantomred-vs-burp-suite.html
+| Tool | Purpose |
+|------|---------|
+| `nuclei` | Template-based scanning (CVEs, exposures, misconfigs) |
+| `ffuf` | Directory fuzzing, parameter discovery, vhost fuzzing |
+| `sqlmap` | SQL injection detection and exploitation |
 
 ---
 
-## Tools Commonly Used in Pentesting Pipelines
+## Operational Notes
 
-Security professionals draw from a consistent set of tools across reconnaissance, vulnerability scanning, and exploitation phases. Here is where each commonly-used tool fits in an external pentest workflow:
+**Passive before active.** Always exhaust passive sources (subfinder, assetfinder, amass passive) before running active DNS brute force or HTTP probing. Passive recon leaves zero footprint.
 
-**Nmap** — Port scanning and service version detection. Entry point for any external engagement. Identifies open ports, running services, and software versions that inform all subsequent scanning decisions. Essential for both network-layer recon and feeding service context into Nuclei.
+**Always httpx-filter.** Never run Nuclei or FFUF directly against raw subdomain lists. httpx filters out dead hosts, parking pages, and NXDOMAIN records — reducing noise and preventing wasted scan cycles.
 
-**Nuclei** — Template-based vulnerability scanner maintained by ProjectDiscovery. 9000+ community templates covering CVEs, exposed admin panels, misconfigured services, and web application vulnerability patterns. Runs after Nmap service detection to apply targeted templates against confirmed technologies rather than scanning everything blindly.
+**Rate limit everything.** Use `-rl 50 -bulk-size 25` on Nuclei and `-rate 100` on FFUF as baseline limits. Reduce further on private programs and targets with explicit rate-limit policies.
 
-**FFUF** — Fast web fuzzer for directory enumeration, parameter discovery, and virtual host identification. Surfaces endpoints and paths that are not linked from the application surface — backup files, development endpoints, exposed configuration files, and unprotected admin interfaces. FFUF output feeds directly into manual testing and SQLMap.
+**Delta over re-scan.** Save each run's output in a date-stamped directory. Use `comm -13` to surface only net-new findings instead of re-triaging your entire known subdomain inventory on every run.
 
-**SQLMap** — Automated SQL injection detection and database extraction. Runs against specific parameters discovered during fuzzing or application crawling. Should always be used with explicit authorisation — `--level` and `--risk` settings should be conservative on production targets.
-
-**Burp Suite** — Industry-standard proxy for manual web application testing. Not an automation tool, but the primary instrument for request interception, manual exploitation, and deep application logic testing. Sits alongside automated tools rather than replacing them — automated recon and manual Burp-based exploitation are complementary workflows, not competing ones.
-
-Each tool addresses a different phase of the engagement. Effective pentest pipelines chain them deliberately rather than running each in isolation.
+**CNAME before HTTP.** Run `dnsx -cname` on your full subdomain list before httpx. Dangling CNAMEs pointing to deprovisioned cloud services are claimable and consistently pay well on bug bounty programs.
 
 ---
 
-## Further reading
+## Related Resources
 
-For a detailed comparison of [manual vs autonomous penetration testing](https://www.phantomred.com/phantomred-vs-burp-suite.html) approaches and where each fits in a professional workflow, see the PhantomRed documentation.
-
----
-
-## Files in this repository
-
-| File | Contents |
-|------|----------|
-| `README.md` | Overview, tool chain, concepts |
-| `workflow-example.md` | Step-by-step recon workflow walkthrough |
-| `tools-used.md` | Tool reference with flags and use cases |
+- [PhantomRed — Autonomous Penetration Testing](https://www.phantomred.com/autonomous-penetration-testing.html)
+- [Subdomain Recon Automation Guide](https://www.phantomred.com/subdomain-recon-automation.html)
+- [Nuclei Automation Workflows](https://www.phantomred.com/nuclei-automation-workflows.html)
+- [Nmap + Nuclei + FFUF Automation](https://www.phantomred.com/nmap-nuclei-ffuf-automation.html)
+- [Recon Workflow Generator](https://www.phantomred.com/recon-workflow-generator.html)
+- [Reconnaissance Automation for Bug Bounty](https://www.phantomred.com/reconnaissance-automation-for-bug-bounty.html)
 
 ---
 
-## Responsible use
+## Responsible Use
 
-All techniques documented here are for use on targets you own or have explicit written authorisation to test. Unauthorised scanning is illegal in most jurisdictions. Bug bounty programs define their own scope — always read the programme rules before running any tools.
+All techniques documented here are for use on targets you own or have **explicit written authorisation** to test. Unauthorised scanning is illegal in most jurisdictions. Bug bounty programs define their own scope — always read the programme rules before running any tools.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)
+
+---
+
+*Maintained by [PhantomRed](https://www.phantomred.com) — autonomous AI penetration testing by [PhredSec Technologies Private Limited](https://www.phantomred.com/about.html)*
