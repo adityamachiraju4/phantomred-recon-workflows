@@ -134,3 +134,4 @@ Built and maintained by [**PhantomRed**](https://www.phantomred.com)
 · Autonomous AI Penetration Testing
 
 </div>
+> Part of the [PhantomRed](https://www.phantomred.com) offensive security toolkit. See the full guide: [Autonomous Recon Workflows](https://www.phantomred.com/autonomous-recon-workflows.html).
